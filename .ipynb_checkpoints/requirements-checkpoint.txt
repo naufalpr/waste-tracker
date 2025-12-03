@@ -1,0 +1,12 @@
+streamlit
+pandas
+numpy
+geopandas
+plotly
+psycopg2-binary
+sqlalchemy
+pydeck
+shapely
+fiona
+rtree
+apache-airflow==2.7.1
