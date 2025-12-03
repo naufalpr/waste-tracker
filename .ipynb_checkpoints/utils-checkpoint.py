@@ -1,24 +1,28 @@
 # utils.py
-import os
+import streamlit as st
 from sqlalchemy import create_engine
-import logging
-
-# Setup Logging Sederhana
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-logger = logging.getLogger("waste_tracker")
+import os
 
 def get_engine():
-    # Ganti kredensial sesuai database lokal Anda
-    DB_USER = "postgres"
-    DB_PASS = "admin123"
-    DB_HOST = "localhost"
-    DB_PORT = "5432"
-    DB_NAME = "waste"
+    # 1. Coba ambil dari Streamlit Secrets (Prioritas Utama untuk Cloud)
+    try:
+        # Mengakses section [connections.postgresql] di secrets.toml
+        db_conf = st.secrets["connections"]["postgresql"]
+        
+        # Susun Connection String
+        db_url = f"postgresql+psycopg2://{db_conf['username']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}"
+        
+        return create_engine(db_url)
+        
+    except Exception:
+        pass
     
-    # Prioritaskan Environment Variable, fallback ke hardcoded
-    db_url = os.environ.get(
-        "WASTE_DB_URL",
-        f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    )
-    
-    return create_engine(db_url, echo=False, future=False)
+    # 2. Fallback: Coba ambil dari Environment Variable (Opsional)
+    # Ini berguna jika Anda menjalankan script ELT di luar Streamlit
+    db_url = os.environ.get("WASTE_DB_URL")
+    if db_url:
+        return create_engine(db_url)
+
+    # 3. Fallback Terakhir: Localhost (Hanya jalan di laptop Anda)
+    # Ganti kredensial ini sesuai database lokal Anda
+    return create_engine("postgresql+psycopg2://postgres:admin123@localhost:5432/waste")

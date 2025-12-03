@@ -1,0 +1,16 @@
+# File Konfigurasi Rahasia (JANGAN DIHAPUS DARI SINI)
+.streamlit/secrets.toml
+.env
+
+# File Sampah Python
+__pycache__/
+*.pyc
+
+# Virtual Environment (Jangan upload folder venv/library)
+venv/
+env/
+.venv/
+
+# Folder IDE (VS Code / PyCharm)
+.vscode/
+.idea/
