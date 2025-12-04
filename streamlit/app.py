@@ -276,6 +276,7 @@ if not df_fleet.empty:
         if pd.isna(max_v): max_v = 100
         fig_sc.add_shape(type="line", x0=0, y0=0, x1=max_v, y1=max_v, line=dict(dash="dash", color="grey"))
         st.plotly_chart(fig_sc, use_container_width=True)
+        st.caption("ℹ️ **Titik di atas garis putus-putus** menandakan kecamatan yang kekurangan armada (Overload).")
 
     with col_b:
         st.markdown("##### 🚨 Status Beban Kerja")
