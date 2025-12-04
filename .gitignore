@@ -3,8 +3,8 @@
 .env
 
 # File Sampah Python
+.ipynb_checkpoints/
 __pycache__/
-*.pyc
 
 # Virtual Environment (Jangan upload folder venv/library)
 venv/
