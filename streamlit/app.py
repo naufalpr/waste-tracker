@@ -1,22 +1,4 @@
 # streamlit/app.py
-
-# ==========================================
-# 🔧 FIX: FORCE IPv4 (WAJIB PALING ATAS)
-# ==========================================
-# Kode ini HARUS dijalankan sebelum library lain (seperti sqlalchemy/requests)
-# di-import agar Python dipaksa menggunakan IPv4 dan menghindari error IPv6 Supabase.
-import socket
-try:
-    _orig_getaddrinfo = socket.getaddrinfo
-    def _ipv4_only_getaddrinfo(*args, **kwargs):
-        responses = _orig_getaddrinfo(*args, **kwargs)
-        # Hanya ambil hasil yang AF_INET (IPv4), buang AF_INET6 (IPv6)
-        return [r for r in responses if r[0] == socket.AF_INET]
-    socket.getaddrinfo = _ipv4_only_getaddrinfo
-except Exception:
-    pass
-# ==========================================
-
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
@@ -25,6 +7,7 @@ import sys
 import re
 import plotly.express as px
 from sqlalchemy import create_engine, text
+import socket
 
 # Setup Page Config
 st.set_page_config("Waste Tracker Jakarta", layout="wide")
@@ -37,27 +20,6 @@ try:
 except Exception:
     pass
 
-# --- DATABASE CONNECTION ---
-def get_db_engine():
-    """
-    Membuat koneksi database menggunakan Secrets.
-    """
-    # Cek apakah secrets tersedia
-    if st.secrets and "connections" in st.secrets and "postgresql" in st.secrets["connections"]:
-        try:
-            db_conf = st.secrets["connections"]["postgresql"]
-            # Connection String standar
-            url = f"postgresql+psycopg2://{db_conf['username']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}"
-            return create_engine(url)
-        except Exception as e:
-            st.error(f"Format Secrets salah: {e}")
-            return None
-    else:
-        st.error("❌ Kredensial Database tidak ditemukan!")
-        st.info("Mohon atur `.streamlit/secrets.toml` (Lokal) atau `Settings -> Secrets` (Streamlit Cloud).")
-        st.stop()
-        return None
-
 # --- HELPER FUNCTIONS ---
 def aggressive_clean_py(text):
     if not isinstance(text, str): return None
@@ -66,6 +28,42 @@ def aggressive_clean_py(text):
     text = re.sub(r'[^\w\s]', '', text) 
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+# --- DATABASE CONNECTION (NUCLEAR FIX) ---
+def get_db_engine():
+    """
+    Menggunakan Resolusi DNS Manual untuk mendapatkan IPv4.
+    Ini mem-bypass masalah routing IPv6 di Streamlit Cloud.
+    """
+    if not (st.secrets and "connections" in st.secrets and "postgresql" in st.secrets["connections"]):
+        st.error("❌ Kredensial Database tidak ditemukan di Secrets!")
+        st.stop()
+        return None
+
+    try:
+        conf = st.secrets["connections"]["postgresql"]
+        host = conf['host']
+        
+        # --- LANGKAH 1: TERJEMAHKAN DOMAIN KE IPv4 SECARA MANUAL ---
+        # Kita minta Python mencari alamat IP versi 4 dari domain Supabase
+        try:
+            # gethostbyname hanya mengembalikan IPv4
+            ip_address = socket.gethostbyname(host)
+            # print(f"DEBUG: Resolved {host} to {ip_address}") # Uncomment untuk debug
+        except socket.gaierror:
+            # Jika gagal resolve, fallback ke host asli
+            ip_address = host
+        
+        # --- LANGKAH 2: GUNAKAN IP TERSEBUT DI URL ---
+        # Kita pakai IP address (angka), bukan domain (huruf)
+        # Tambahkan ?sslmode=require agar koneksi tetap aman meski pakai IP
+        url = f"postgresql+psycopg2://{conf['username']}:{conf['password']}@{ip_address}:{conf['port']}/{conf['database']}?sslmode=require"
+        
+        return create_engine(url)
+
+    except Exception as e:
+        st.error(f"Gagal inisialisasi Engine: {e}")
+        return None
 
 # --- LOAD DATA FUNCTIONS ---
 @st.cache_data
@@ -82,33 +80,34 @@ def load_data():
     """
     
     try:
-        # Gunakan connection context untuk SQLAlchemy 2.0+
+        # Gunakan connection context
         with engine.connect() as conn:
             df = pd.read_sql(text(q), conn)
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
         return df
     except Exception as e:
-        st.error(f"Gagal mengambil data dari Database: {e}")
+        st.error(f"Terjadi kesalahan koneksi Database: {e}")
         st.stop()
 
 @st.cache_data
 def load_geo():
-    # Load GeoJSON (File lokal, tidak butuh DB)
-    path = os.environ.get("WASTE_DATA_DIR", "./data")
+    # Load GeoJSON (File lokal)
+    # Cek berbagai kemungkinan path
+    possible_paths = [
+        os.path.join("data", "kecamatan.geojson"),
+        os.path.join(ROOT_DIR, "data", "kecamatan.geojson"),
+        os.path.join(os.path.dirname(__file__), "..", "data", "kecamatan.geojson"),
+        "./data/kecamatan.geojson"
+    ]
     
-    # Coba cari path data yang benar (Lokal vs Cloud)
-    if not os.path.exists(path):
-        # Fallback path jika di cloud
-        path = os.path.join(os.path.dirname(__file__), "..", "data")
-
-    gfile = os.path.join(path, "kecamatan.geojson")
-
-    if not os.path.exists(gfile):
-        # Coba cari di current directory
-        if os.path.exists("data/kecamatan.geojson"):
-            gfile = "data/kecamatan.geojson"
-        else:
-            return None
+    gfile = None
+    for p in possible_paths:
+        if os.path.exists(p):
+            gfile = p
+            break
+            
+    if not gfile:
+        return None
 
     try:
         gdf = gpd.read_file(gfile).to_crs(4326)
@@ -153,11 +152,11 @@ st.title("📊 Waste Tracker — Monitoring Sampah Kota")
 try:
     df = load_data()
 except Exception as e:
-    st.error(f"Terjadi kesalahan saat memuat data: {e}")
+    st.error(f"Critical Error: {e}")
     st.stop()
 
 if df.empty:
-    st.warning("Database Kosong atau Query tidak mengembalikan data. Pastikan pipeline ELT sudah dijalankan.")
+    st.warning("Database Kosong. Silakan jalankan ELT pipeline.")
     st.stop()
 
 # --- SIDEBAR CONFIGURATION ---
