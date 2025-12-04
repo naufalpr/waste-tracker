@@ -7,7 +7,6 @@ import sys
 import re
 import plotly.express as px
 from sqlalchemy import create_engine, text
-import socket
 
 # Setup Page Config
 st.set_page_config("Waste Tracker Jakarta", layout="wide")
@@ -29,35 +28,22 @@ def aggressive_clean_py(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# --- DATABASE CONNECTION (NUCLEAR FIX) ---
+# --- DATABASE CONNECTION (CLEAN VERSION via POOLER) ---
 def get_db_engine():
     """
-    Menggunakan Resolusi DNS Manual untuk mendapatkan IPv4.
-    Ini mem-bypass masalah routing IPv6 di Streamlit Cloud.
+    Koneksi Standar menggunakan Supabase Connection Pooler (Port 6543).
+    Pooler ini support IPv4, jadi tidak perlu hack DNS.
     """
     if not (st.secrets and "connections" in st.secrets and "postgresql" in st.secrets["connections"]):
-        st.error("❌ Kredensial Database tidak ditemukan di Secrets!")
+        st.error("❌ Kredensial Database tidak ditemukan!")
         st.stop()
-        return None
 
     try:
         conf = st.secrets["connections"]["postgresql"]
-        host = conf['host']
         
-        # --- LANGKAH 1: TERJEMAHKAN DOMAIN KE IPv4 SECARA MANUAL ---
-        # Kita minta Python mencari alamat IP versi 4 dari domain Supabase
-        try:
-            # gethostbyname hanya mengembalikan IPv4
-            ip_address = socket.gethostbyname(host)
-            # print(f"DEBUG: Resolved {host} to {ip_address}") # Uncomment untuk debug
-        except socket.gaierror:
-            # Jika gagal resolve, fallback ke host asli
-            ip_address = host
-        
-        # --- LANGKAH 2: GUNAKAN IP TERSEBUT DI URL ---
-        # Kita pakai IP address (angka), bukan domain (huruf)
-        # Tambahkan ?sslmode=require agar koneksi tetap aman meski pakai IP
-        url = f"postgresql+psycopg2://{conf['username']}:{conf['password']}@{ip_address}:{conf['port']}/{conf['database']}?sslmode=require"
+        # Susun Connection String
+        # Pastikan di secrets port-nya 6543
+        url = f"postgresql+psycopg2://{conf['username']}:{conf['password']}@{conf['host']}:{conf['port']}/{conf['database']}"
         
         return create_engine(url)
 
@@ -80,7 +66,6 @@ def load_data():
     """
     
     try:
-        # Gunakan connection context
         with engine.connect() as conn:
             df = pd.read_sql(text(q), conn)
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
@@ -92,21 +77,17 @@ def load_data():
 @st.cache_data
 def load_geo():
     # Load GeoJSON (File lokal)
-    # Cek berbagai kemungkinan path
-    possible_paths = [
-        os.path.join("data", "kecamatan.geojson"),
-        os.path.join(ROOT_DIR, "data", "kecamatan.geojson"),
-        os.path.join(os.path.dirname(__file__), "..", "data", "kecamatan.geojson"),
-        "./data/kecamatan.geojson"
-    ]
-    
-    gfile = None
-    for p in possible_paths:
-        if os.path.exists(p):
-            gfile = p
-            break
-            
-    if not gfile:
+    path = os.environ.get("WASTE_DATA_DIR", "./data")
+    if not os.path.exists(path):
+        path = os.path.join(os.path.dirname(__file__), "..", "data")
+
+    gfile = os.path.join(path, "kecamatan.geojson")
+
+    # Fallback cari manual
+    if not os.path.exists(gfile) and os.path.exists("data/kecamatan.geojson"):
+        gfile = "data/kecamatan.geojson"
+
+    if not os.path.exists(gfile):
         return None
 
     try:
