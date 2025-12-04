@@ -36,7 +36,7 @@ def get_db_engine():
 
     try:
         conf = st.secrets["connections"]["postgresql"]
-        # Menggunakan Pooler Supabase
+        # Menggunakan string koneksi standar (Pooler Supabase)
         url = f"postgresql+psycopg2://{conf['username']}:{conf['password']}@{conf['host']}:{conf['port']}/{conf['database']}"
         return create_engine(url)
 
@@ -44,7 +44,7 @@ def get_db_engine():
         st.error(f"Gagal inisialisasi Engine: {e}")
         return None
 
-# --- LOAD DATA FUNCTIONS (PURE SQLALCHEMY EXECUTE) ---
+# --- LOAD DATA FUNCTIONS ---
 @st.cache_data
 def load_data():
     engine = get_db_engine()
@@ -60,14 +60,15 @@ def load_data():
     
     try:
         with engine.connect() as conn:
-            # FIX: Execute query langsung tanpa pandas read_sql
+            # 1. Eksekusi Query
             result = conn.execute(text(q))
-            # Convert ke DataFrame manual
+            # 2. Manual DataFrame
             df = pd.DataFrame(result.fetchall(), columns=result.keys())
         
-        # Post-processing
+        # 3. Post-Processing (Fix Tipe Data)
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
         df['date'] = pd.to_datetime(df['date']).dt.date
+        
         return df
     except Exception as e:
         st.error(f"Terjadi kesalahan koneksi Database (load_data): {e}")
@@ -82,7 +83,6 @@ def load_geo():
 
     gfile = os.path.join(path, "kecamatan.geojson")
     
-    # Fallback cari manual
     if not os.path.exists(gfile) and os.path.exists("data/kecamatan.geojson"):
         gfile = "data/kecamatan.geojson"
 
@@ -105,14 +105,17 @@ def load_fleet_analysis(start_date, end_date):
     
     try:
         with engine.connect() as conn:
-            # --- FIX: Hapus pd.read_sql, ganti manual execute ---
-            
-            # 1. Query Data Armada
+            # --- 1. Query Armada ---
             q_fleet = "SELECT kecamatan, armada_total, armada_operasional, ritase_harian, kapasitas_m3 FROM warehouse.dim_fleet;"
             res_fleet = conn.execute(text(q_fleet))
             df_fleet = pd.DataFrame(res_fleet.fetchall(), columns=res_fleet.keys())
 
-            # 2. Query Data Sampah Rata-rata
+            # [FIX PENTING] Konversi kolom angka secara paksa agar tidak dianggap string
+            cols_to_numeric = ['armada_total', 'armada_operasional', 'ritase_harian', 'kapasitas_m3']
+            for col in cols_to_numeric:
+                df_fleet[col] = pd.to_numeric(df_fleet[col], errors='coerce').fillna(0)
+
+            # --- 2. Query Waste ---
             q_waste = f"""
             SELECT l.kecamatan, AVG(f.volume) as avg_daily_waste_ton
             FROM warehouse.fact_waste f
@@ -123,6 +126,9 @@ def load_fleet_analysis(start_date, end_date):
             """
             res_waste = conn.execute(text(q_waste))
             df_waste = pd.DataFrame(res_waste.fetchall(), columns=res_waste.keys())
+            
+            # Fix tipe data waste
+            df_waste['avg_daily_waste_ton'] = pd.to_numeric(df_waste['avg_daily_waste_ton'], errors='coerce').fillna(0)
         
         return pd.merge(df_fleet, df_waste, on="kecamatan", how="inner")
     except Exception as e:
@@ -248,6 +254,8 @@ else:
 
 if not df_fleet.empty:
     DENSITY = 0.33
+    
+    # HITUNG KAPASITAS (Sekarang aman karena tipe data sudah Float)
     df_fleet['capacity_ton'] = df_fleet['armada_operasional'] * df_fleet['ritase_harian'] * df_fleet['kapasitas_m3'] * DENSITY
     df_fleet['capacity_ton'] = df_fleet['capacity_ton'].replace(0, 0.1)
     
