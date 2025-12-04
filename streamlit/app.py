@@ -28,30 +28,23 @@ def aggressive_clean_py(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# --- DATABASE CONNECTION (CLEAN VERSION via POOLER) ---
+# --- DATABASE CONNECTION ---
 def get_db_engine():
-    """
-    Koneksi Standar menggunakan Supabase Connection Pooler (Port 6543).
-    Pooler ini support IPv4, jadi tidak perlu hack DNS.
-    """
     if not (st.secrets and "connections" in st.secrets and "postgresql" in st.secrets["connections"]):
         st.error("❌ Kredensial Database tidak ditemukan!")
         st.stop()
 
     try:
         conf = st.secrets["connections"]["postgresql"]
-        
-        # Susun Connection String
-        # Pastikan di secrets port-nya 6543
+        # Menggunakan string koneksi standar (Pooler Supabase)
         url = f"postgresql+psycopg2://{conf['username']}:{conf['password']}@{conf['host']}:{conf['port']}/{conf['database']}"
-        
         return create_engine(url)
 
     except Exception as e:
         st.error(f"Gagal inisialisasi Engine: {e}")
         return None
 
-# --- LOAD DATA FUNCTIONS ---
+# --- LOAD DATA FUNCTIONS (METODE MANUAL EXECUTE) ---
 @st.cache_data
 def load_data():
     engine = get_db_engine()
@@ -67,8 +60,18 @@ def load_data():
     
     try:
         with engine.connect() as conn:
-            df = pd.read_sql(text(q), conn)
+            # 1. Eksekusi Query pakai SQLAlchemy langsung (Lebih aman dari bug Pandas)
+            result = conn.execute(text(q))
+            
+            # 2. Konversi hasil ke DataFrame manual
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        
+        # Bersihkan tipe data
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
+        
+        # Pastikan kolom date jadi datetime (kadang dari DB masih string/objek)
+        df['date'] = pd.to_datetime(df['date']).dt.date
+        
         return df
     except Exception as e:
         st.error(f"Terjadi kesalahan koneksi Database: {e}")
@@ -82,7 +85,7 @@ def load_geo():
         path = os.path.join(os.path.dirname(__file__), "..", "data")
 
     gfile = os.path.join(path, "kecamatan.geojson")
-
+    
     # Fallback cari manual
     if not os.path.exists(gfile) and os.path.exists("data/kecamatan.geojson"):
         gfile = "data/kecamatan.geojson"
@@ -106,9 +109,14 @@ def load_fleet_analysis(start_date, end_date):
     
     try:
         with engine.connect() as conn:
+            # Query 1: Fleet
             q_fleet = "SELECT kecamatan, armada_total, armada_operasional, ritase_harian, kapasitas_m3 FROM warehouse.dim_fleet;"
-            df_fleet = pd.read_sql(text(q_fleet), conn)
-            
+            res_fleet = conn.execute(text(q_fleet))
+            df_fleet = pd.read_sql(text(q_fleet), conn) # read_sql untuk simple query biasanya masih aman, tapi jika error ganti ke fetchall juga
+            # Agar konsisten, kita pakai cara manual saja:
+            df_fleet = pd.DataFrame(res_fleet.fetchall(), columns=res_fleet.keys())
+
+            # Query 2: Waste Avg
             q_waste = f"""
             SELECT l.kecamatan, AVG(f.volume) as avg_daily_waste_ton
             FROM warehouse.fact_waste f
@@ -117,7 +125,8 @@ def load_fleet_analysis(start_date, end_date):
             WHERE t.date >= '{start_date}' AND t.date <= '{end_date}'
             GROUP BY l.kecamatan;
             """
-            df_waste = pd.read_sql(text(q_waste), conn)
+            res_waste = conn.execute(text(q_waste))
+            df_waste = pd.DataFrame(res_waste.fetchall(), columns=res_waste.keys())
         
         return pd.merge(df_fleet, df_waste, on="kecamatan", how="inner")
     except Exception as e:
@@ -144,6 +153,7 @@ if df.empty:
 st.sidebar.header("🎛️ Filter Dashboard")
 
 # 1. Filter Tanggal
+# Pastikan kolom date sudah format date
 df["date"] = pd.to_datetime(df["date"]).dt.date
 min_date = df["date"].min()
 max_date = df["date"].max()
