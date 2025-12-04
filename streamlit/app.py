@@ -6,6 +6,7 @@ import os
 import sys
 import re
 import plotly.express as px
+from sqlalchemy import text # <--- Tambahan Wajib untuk SQLAlchemy 2.0
 
 # --- PATH CONFIGURATION ---
 try:
@@ -45,7 +46,10 @@ def load_data():
     GROUP BY t.date, l.kecamatan
     ORDER BY t.date;
     """
-    df = pd.read_sql(q, engine)
+    # PERBAIKAN: Menggunakan connection context manager
+    with engine.connect() as conn:
+        df = pd.read_sql(text(q), conn)
+        
     df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
     return df
 
@@ -69,21 +73,23 @@ def load_geo():
 
 @st.cache_data
 def load_fleet_analysis(start_date, end_date):
-    q_fleet = """
-    SELECT kecamatan, armada_total, armada_operasional, ritase_harian, kapasitas_m3
-    FROM warehouse.dim_fleet;
-    """
-    df_fleet = pd.read_sql(q_fleet, engine)
-    
-    q_waste = f"""
-    SELECT l.kecamatan, AVG(f.volume) as avg_daily_waste_ton
-    FROM warehouse.fact_waste f
-    JOIN warehouse.dim_location l ON f.location_id = l.id
-    JOIN warehouse.dim_time t ON f.time_id = t.id
-    WHERE t.date >= '{start_date}' AND t.date <= '{end_date}'
-    GROUP BY l.kecamatan;
-    """
-    df_waste = pd.read_sql(q_waste, engine)
+    # PERBAIKAN: Menggunakan connection context manager untuk kedua query
+    with engine.connect() as conn:
+        q_fleet = """
+        SELECT kecamatan, armada_total, armada_operasional, ritase_harian, kapasitas_m3
+        FROM warehouse.dim_fleet;
+        """
+        df_fleet = pd.read_sql(text(q_fleet), conn)
+        
+        q_waste = f"""
+        SELECT l.kecamatan, AVG(f.volume) as avg_daily_waste_ton
+        FROM warehouse.fact_waste f
+        JOIN warehouse.dim_location l ON f.location_id = l.id
+        JOIN warehouse.dim_time t ON f.time_id = t.id
+        WHERE t.date >= '{start_date}' AND t.date <= '{end_date}'
+        GROUP BY l.kecamatan;
+        """
+        df_waste = pd.read_sql(text(q_waste), conn)
     
     return pd.merge(df_fleet, df_waste, on="kecamatan", how="inner")
 
@@ -93,7 +99,12 @@ def load_fleet_analysis(start_date, end_date):
 st.title("📊 Waste Tracker — Monitoring Sampah Kota")
 
 # A. LOAD INITIAL DATA
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Gagal koneksi ke Database: {e}")
+    st.stop()
+
 if df.empty:
     st.warning("Database Kosong. Silakan jalankan ELT pipeline.")
     st.stop()
@@ -140,7 +151,9 @@ if df_filtered.empty:
 
 # C. METRIK
 total_vol = df_filtered['volume'].sum()
-avg_vol = total_vol / ((end_date - start_date).days + 1)
+# Hindari error division by zero jika days=0
+days_count = (end_date - start_date).days + 1
+avg_vol = total_vol / days_count if days_count > 0 else 0
 
 col1, col2 = st.columns(2)
 col1.metric("Total Volume (Ton)", f"{total_vol:,.0f}")
@@ -205,6 +218,10 @@ else:
 if not df_fleet.empty:
     DENSITY = 0.33
     df_fleet['capacity_ton'] = df_fleet['armada_operasional'] * df_fleet['ritase_harian'] * df_fleet['kapasitas_m3'] * DENSITY
+    
+    # Hindari division by zero
+    df_fleet['capacity_ton'] = df_fleet['capacity_ton'].replace(0, 0.1)
+    
     df_fleet['load_ratio'] = (df_fleet['avg_daily_waste_ton'] / df_fleet['capacity_ton']) * 100
     df_fleet['status'] = df_fleet['load_ratio'].apply(lambda x: "CRITICAL" if x > 110 else ("WARNING" if x > 90 else "SAFE"))
 
@@ -219,8 +236,11 @@ if not df_fleet.empty:
             color_discrete_map={"SAFE": "green", "WARNING": "orange", "CRITICAL": "red"},
             labels={"capacity_ton": "Kapasitas (Ton)", "avg_daily_waste_ton": "Beban Sampah (Ton)"}
         )
-        max_v = max(df_fleet['capacity_ton'].max(), df_fleet['avg_daily_waste_ton'].max())
-        if pd.isna(max_v): max_v = 100
+        
+        max_cap = df_fleet['capacity_ton'].max()
+        max_load = df_fleet['avg_daily_waste_ton'].max()
+        max_v = max(max_cap if pd.notna(max_cap) else 100, max_load if pd.notna(max_load) else 100)
+        
         fig_sc.add_shape(type="line", x0=0, y0=0, x1=max_v, y1=max_v, line=dict(dash="dash", color="grey"))
         st.plotly_chart(fig_sc, use_container_width=True)
 
@@ -229,7 +249,8 @@ if not df_fleet.empty:
         st.dataframe(
             df_fleet[['kecamatan', 'load_ratio', 'status']].sort_values('load_ratio', ascending=False),
             hide_index=True,
-            column_config={"load_ratio": st.column_config.ProgressColumn("Load %", format="%.0f%%", min_value=0, max_value=150)}
+            # Update format ke 2 desimal sesuai permintaan sebelumnya agar tidak 0%
+            column_config={"load_ratio": st.column_config.ProgressColumn("Load %", format="%.2f%%", min_value=0, max_value=150)}
         )
 
     # --- GRAFIK KETERSEDIAAN ARMADA (BAR CHART) ---
