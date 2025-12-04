@@ -7,6 +7,21 @@ import sys
 import re
 import plotly.express as px
 from sqlalchemy import create_engine, text
+import socket
+
+# --- 🛠️ FIX: FORCE IPv4 (WAJIB DI PALING ATAS) ---
+# Ini mengatasi error "Cannot assign requested address" pada IPv6 Supabase
+# Kode ini memaksa Python untuk mengabaikan alamat IPv6 dan hanya memakai IPv4.
+try:
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _ipv4_only_getaddrinfo(*args, **kwargs):
+        responses = _orig_getaddrinfo(*args, **kwargs)
+        # Hanya ambil hasil yang AF_INET (IPv4), buang AF_INET6 (IPv6)
+        return [r for r in responses if r[0] == socket.AF_INET]
+    socket.getaddrinfo = _ipv4_only_getaddrinfo
+except Exception:
+    pass
+# --------------------------------------------------
 
 # Setup Page Config
 st.set_page_config("Waste Tracker Jakarta", layout="wide")
@@ -32,12 +47,12 @@ def aggressive_clean_py(text):
 def get_db_engine():
     """
     Hanya mencoba koneksi jika Secrets tersedia di Streamlit Cloud/Lokal.
-    TIDAK ADA fallback ke localhost.
     """
     # Cek apakah secrets tersedia
     if st.secrets and "connections" in st.secrets and "postgresql" in st.secrets["connections"]:
         try:
             db_conf = st.secrets["connections"]["postgresql"]
+            # Pastikan menggunakan driver psycopg2
             url = f"postgresql+psycopg2://{db_conf['username']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}"
             return create_engine(url)
         except Exception as e:
@@ -46,7 +61,7 @@ def get_db_engine():
     else:
         st.error("❌ Kredensial Database tidak ditemukan!")
         st.info("Mohon atur `.streamlit/secrets.toml` (Lokal) atau `Settings -> Secrets` (Streamlit Cloud).")
-        st.stop() # Berhenti disini jika tidak ada secrets
+        st.stop() 
         return None
 
 # --- LOAD DATA FUNCTIONS ---
@@ -64,12 +79,12 @@ def load_data():
     """
     
     try:
+        # Gunakan connection context untuk SQLAlchemy 2.0+
         with engine.connect() as conn:
             df = pd.read_sql(text(q), conn)
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
         return df
     except Exception as e:
-        # Tampilkan error asli jika koneksi ke Supabase gagal (misal: password salah)
         st.error(f"Gagal mengambil data dari Database: {e}")
         st.stop()
 
