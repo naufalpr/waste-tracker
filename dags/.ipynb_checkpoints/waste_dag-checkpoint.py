@@ -18,8 +18,8 @@ if PROJECT_ROOT not in sys.path:
 # --- IMPORT MODULE PROYEK ---
 try:
     from utils import get_engine
-    from etl.setup_elt import setup_elt_database
-    from etl.validator import validate_waste_data, validate_sipsn_data
+    from elt.setup_elt import setup_elt_database
+    from elt.validator import validate_waste_data, validate_sipsn_data
     from warehouse.dim_time import load_dim_time
     from warehouse.dim_location import load_dim_location
     from warehouse.dim_fleet import load_dim_fleet
