@@ -36,7 +36,7 @@ def get_db_engine():
 
     try:
         conf = st.secrets["connections"]["postgresql"]
-        # Menggunakan string koneksi standar (Pooler Supabase)
+        # Menggunakan Pooler Supabase
         url = f"postgresql+psycopg2://{conf['username']}:{conf['password']}@{conf['host']}:{conf['port']}/{conf['database']}"
         return create_engine(url)
 
@@ -44,7 +44,7 @@ def get_db_engine():
         st.error(f"Gagal inisialisasi Engine: {e}")
         return None
 
-# --- LOAD DATA FUNCTIONS (METODE MANUAL EXECUTE) ---
+# --- LOAD DATA FUNCTIONS (PURE SQLALCHEMY EXECUTE) ---
 @st.cache_data
 def load_data():
     engine = get_db_engine()
@@ -60,21 +60,17 @@ def load_data():
     
     try:
         with engine.connect() as conn:
-            # 1. Eksekusi Query pakai SQLAlchemy langsung (Lebih aman dari bug Pandas)
+            # FIX: Execute query langsung tanpa pandas read_sql
             result = conn.execute(text(q))
-            
-            # 2. Konversi hasil ke DataFrame manual
+            # Convert ke DataFrame manual
             df = pd.DataFrame(result.fetchall(), columns=result.keys())
         
-        # Bersihkan tipe data
+        # Post-processing
         df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
-        
-        # Pastikan kolom date jadi datetime (kadang dari DB masih string/objek)
         df['date'] = pd.to_datetime(df['date']).dt.date
-        
         return df
     except Exception as e:
-        st.error(f"Terjadi kesalahan koneksi Database: {e}")
+        st.error(f"Terjadi kesalahan koneksi Database (load_data): {e}")
         st.stop()
 
 @st.cache_data
@@ -109,14 +105,14 @@ def load_fleet_analysis(start_date, end_date):
     
     try:
         with engine.connect() as conn:
-            # Query 1: Fleet
+            # --- FIX: Hapus pd.read_sql, ganti manual execute ---
+            
+            # 1. Query Data Armada
             q_fleet = "SELECT kecamatan, armada_total, armada_operasional, ritase_harian, kapasitas_m3 FROM warehouse.dim_fleet;"
             res_fleet = conn.execute(text(q_fleet))
-            df_fleet = pd.read_sql(text(q_fleet), conn) # read_sql untuk simple query biasanya masih aman, tapi jika error ganti ke fetchall juga
-            # Agar konsisten, kita pakai cara manual saja:
             df_fleet = pd.DataFrame(res_fleet.fetchall(), columns=res_fleet.keys())
 
-            # Query 2: Waste Avg
+            # 2. Query Data Sampah Rata-rata
             q_waste = f"""
             SELECT l.kecamatan, AVG(f.volume) as avg_daily_waste_ton
             FROM warehouse.fact_waste f
@@ -130,7 +126,7 @@ def load_fleet_analysis(start_date, end_date):
         
         return pd.merge(df_fleet, df_waste, on="kecamatan", how="inner")
     except Exception as e:
-        st.error(f"Gagal mengambil data armada: {e}")
+        st.error(f"Gagal mengambil data armada (load_fleet_analysis): {e}")
         st.stop()
 
 # --------------------------------------------------------
@@ -153,7 +149,6 @@ if df.empty:
 st.sidebar.header("🎛️ Filter Dashboard")
 
 # 1. Filter Tanggal
-# Pastikan kolom date sudah format date
 df["date"] = pd.to_datetime(df["date"]).dt.date
 min_date = df["date"].min()
 max_date = df["date"].max()
