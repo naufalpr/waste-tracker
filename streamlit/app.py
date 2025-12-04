@@ -6,7 +6,10 @@ import os
 import sys
 import re
 import plotly.express as px
-from sqlalchemy import text # <--- Tambahan Wajib untuk SQLAlchemy 2.0
+from sqlalchemy import create_engine, text
+
+# Setup Page Config
+st.set_page_config("Waste Tracker Jakarta", layout="wide")
 
 # --- PATH CONFIGURATION ---
 try:
@@ -16,16 +19,8 @@ try:
 except Exception:
     pass
 
-from utils import get_engine
-
-st.set_page_config("Waste Tracker Jakarta", layout="wide")
-engine = get_engine()
-
-# --------------------------------------------------------
-# 0. HELPER FUNCTIONS
-# --------------------------------------------------------
+# --- HELPER FUNCTIONS ---
 def aggressive_clean_py(text):
-    """Membersihkan nama kecamatan agar cocok dengan SQL ELT"""
     if not isinstance(text, str): return None
     text = text.strip().upper()
     text = text.replace('\xa0', ' ')
@@ -33,11 +28,32 @@ def aggressive_clean_py(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# --------------------------------------------------------
-# 1. LOAD DATA FUNCTIONS
-# --------------------------------------------------------
+# --- DATABASE CONNECTION ---
+def get_db_engine():
+    """
+    Hanya mencoba koneksi jika Secrets tersedia di Streamlit Cloud/Lokal.
+    TIDAK ADA fallback ke localhost.
+    """
+    # Cek apakah secrets tersedia
+    if st.secrets and "connections" in st.secrets and "postgresql" in st.secrets["connections"]:
+        try:
+            db_conf = st.secrets["connections"]["postgresql"]
+            url = f"postgresql+psycopg2://{db_conf['username']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}"
+            return create_engine(url)
+        except Exception as e:
+            st.error(f"Format Secrets salah: {e}")
+            return None
+    else:
+        st.error("❌ Kredensial Database tidak ditemukan!")
+        st.info("Mohon atur `.streamlit/secrets.toml` (Lokal) atau `Settings -> Secrets` (Streamlit Cloud).")
+        st.stop() # Berhenti disini jika tidak ada secrets
+        return None
+
+# --- LOAD DATA FUNCTIONS ---
 @st.cache_data
 def load_data():
+    engine = get_db_engine()
+    
     q = """
     SELECT t.date::date as date, l.kecamatan, SUM(f.volume) as volume
     FROM warehouse.fact_waste f
@@ -46,16 +62,27 @@ def load_data():
     GROUP BY t.date, l.kecamatan
     ORDER BY t.date;
     """
-    # PERBAIKAN: Menggunakan connection context manager
-    with engine.connect() as conn:
-        df = pd.read_sql(text(q), conn)
-        
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
-    return df
+    
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text(q), conn)
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0)
+        return df
+    except Exception as e:
+        # Tampilkan error asli jika koneksi ke Supabase gagal (misal: password salah)
+        st.error(f"Gagal mengambil data dari Database: {e}")
+        st.stop()
 
 @st.cache_data
 def load_geo():
+    # Load GeoJSON (File lokal, tidak butuh DB)
     path = os.environ.get("WASTE_DATA_DIR", "./data")
+    
+    # Coba cari path data yang benar
+    if not os.path.exists(path):
+        # Fallback path jika di cloud
+        path = os.path.join(os.path.dirname(__file__), "..", "data")
+
     gfile = os.path.join(path, "kecamatan.geojson")
 
     if not os.path.exists(gfile):
@@ -73,25 +100,27 @@ def load_geo():
 
 @st.cache_data
 def load_fleet_analysis(start_date, end_date):
-    # PERBAIKAN: Menggunakan connection context manager untuk kedua query
-    with engine.connect() as conn:
-        q_fleet = """
-        SELECT kecamatan, armada_total, armada_operasional, ritase_harian, kapasitas_m3
-        FROM warehouse.dim_fleet;
-        """
-        df_fleet = pd.read_sql(text(q_fleet), conn)
-        
-        q_waste = f"""
-        SELECT l.kecamatan, AVG(f.volume) as avg_daily_waste_ton
-        FROM warehouse.fact_waste f
-        JOIN warehouse.dim_location l ON f.location_id = l.id
-        JOIN warehouse.dim_time t ON f.time_id = t.id
-        WHERE t.date >= '{start_date}' AND t.date <= '{end_date}'
-        GROUP BY l.kecamatan;
-        """
-        df_waste = pd.read_sql(text(q_waste), conn)
+    engine = get_db_engine()
     
-    return pd.merge(df_fleet, df_waste, on="kecamatan", how="inner")
+    try:
+        with engine.connect() as conn:
+            q_fleet = "SELECT kecamatan, armada_total, armada_operasional, ritase_harian, kapasitas_m3 FROM warehouse.dim_fleet;"
+            df_fleet = pd.read_sql(text(q_fleet), conn)
+            
+            q_waste = f"""
+            SELECT l.kecamatan, AVG(f.volume) as avg_daily_waste_ton
+            FROM warehouse.fact_waste f
+            JOIN warehouse.dim_location l ON f.location_id = l.id
+            JOIN warehouse.dim_time t ON f.time_id = t.id
+            WHERE t.date >= '{start_date}' AND t.date <= '{end_date}'
+            GROUP BY l.kecamatan;
+            """
+            df_waste = pd.read_sql(text(q_waste), conn)
+        
+        return pd.merge(df_fleet, df_waste, on="kecamatan", how="inner")
+    except Exception as e:
+        st.error(f"Gagal mengambil data armada: {e}")
+        st.stop()
 
 # --------------------------------------------------------
 # MAIN UI & LOGIC
@@ -99,14 +128,10 @@ def load_fleet_analysis(start_date, end_date):
 st.title("📊 Waste Tracker — Monitoring Sampah Kota")
 
 # A. LOAD INITIAL DATA
-try:
-    df = load_data()
-except Exception as e:
-    st.error(f"Gagal koneksi ke Database: {e}")
-    st.stop()
+df = load_data()
 
 if df.empty:
-    st.warning("Database Kosong. Silakan jalankan ELT pipeline.")
+    st.warning("Database Kosong atau Query tidak mengembalikan data.")
     st.stop()
 
 # --- SIDEBAR CONFIGURATION ---
@@ -151,7 +176,6 @@ if df_filtered.empty:
 
 # C. METRIK
 total_vol = df_filtered['volume'].sum()
-# Hindari error division by zero jika days=0
 days_count = (end_date - start_date).days + 1
 avg_vol = total_vol / days_count if days_count > 0 else 0
 
@@ -167,24 +191,19 @@ daily_trend = df_filtered.groupby("date", as_index=False)["volume"].sum()
 fig_trend = px.line(daily_trend, x="date", y="volume", markers=True, template="plotly_white")
 st.plotly_chart(fig_trend, use_container_width=True)
 
-# E. PETA HEATMAP (STATIC ZOOM)
+# E. PETA HEATMAP
 st.subheader("🗺️ Peta Persebaran")
 gdf = load_geo()
 
 if gdf is not None:
-    # 1. FILTER GEOJSON (Hanya tampilkan poligon yg dipilih)
     if selected_kecamatan:
         gdf_vis = gdf[gdf['kecamatan'].isin(selected_kecamatan)]
     else:
         gdf_vis = gdf
 
-    # 2. AGREGASI DATA
     map_agg = df_filtered.groupby("kecamatan", as_index=False)["volume"].sum()
-    
-    # 3. MERGE
     merged = gdf_vis.merge(map_agg, on="kecamatan", how="left").fillna(0).set_index("kecamatan")
 
-    # 4. VISUALISASI (ZOOM TETAP/STATIC)
     if not merged.empty:
         fig_map = px.choropleth_mapbox(
             merged,
@@ -193,7 +212,6 @@ if gdf is not None:
             color="volume",
             color_continuous_scale="Reds",
             mapbox_style="carto-positron",
-            # KOORDINAT & ZOOM TETAP (JAKARTA)
             center={"lat": -6.22, "lon": 106.83}, 
             zoom=9.8,     
             opacity=0.7,
@@ -203,6 +221,8 @@ if gdf is not None:
         st.plotly_chart(fig_map, use_container_width=True)
     else:
         st.warning("Data geometri untuk wilayah terpilih tidak ditemukan.")
+else:
+    st.warning("File GeoJSON tidak ditemukan di folder 'data/'.")
 
 # F. ANALISIS ARMADA
 st.markdown("---")
@@ -218,14 +238,11 @@ else:
 if not df_fleet.empty:
     DENSITY = 0.33
     df_fleet['capacity_ton'] = df_fleet['armada_operasional'] * df_fleet['ritase_harian'] * df_fleet['kapasitas_m3'] * DENSITY
-    
-    # Hindari division by zero
     df_fleet['capacity_ton'] = df_fleet['capacity_ton'].replace(0, 0.1)
     
     df_fleet['load_ratio'] = (df_fleet['avg_daily_waste_ton'] / df_fleet['capacity_ton']) * 100
     df_fleet['status'] = df_fleet['load_ratio'].apply(lambda x: "CRITICAL" if x > 110 else ("WARNING" if x > 90 else "SAFE"))
 
-    # Layout: Scatter (Kiri) & Table (Kanan)
     col_a, col_b = st.columns([2, 1])
     
     with col_a:
@@ -236,11 +253,8 @@ if not df_fleet.empty:
             color_discrete_map={"SAFE": "green", "WARNING": "orange", "CRITICAL": "red"},
             labels={"capacity_ton": "Kapasitas (Ton)", "avg_daily_waste_ton": "Beban Sampah (Ton)"}
         )
-        
-        max_cap = df_fleet['capacity_ton'].max()
-        max_load = df_fleet['avg_daily_waste_ton'].max()
-        max_v = max(max_cap if pd.notna(max_cap) else 100, max_load if pd.notna(max_load) else 100)
-        
+        max_v = max(df_fleet['capacity_ton'].max(), df_fleet['avg_daily_waste_ton'].max())
+        if pd.isna(max_v): max_v = 100
         fig_sc.add_shape(type="line", x0=0, y0=0, x1=max_v, y1=max_v, line=dict(dash="dash", color="grey"))
         st.plotly_chart(fig_sc, use_container_width=True)
 
@@ -249,14 +263,10 @@ if not df_fleet.empty:
         st.dataframe(
             df_fleet[['kecamatan', 'load_ratio', 'status']].sort_values('load_ratio', ascending=False),
             hide_index=True,
-            # Update format ke 2 desimal sesuai permintaan sebelumnya agar tidak 0%
             column_config={"load_ratio": st.column_config.ProgressColumn("Load %", format="%.2f%%", min_value=0, max_value=150)}
         )
 
-    # --- GRAFIK KETERSEDIAAN ARMADA (BAR CHART) ---
     st.markdown("##### 🚛 Ketersediaan Armada (Total vs Operasional)")
-    
-    # Reshape data untuk Bar Chart
     df_bar = df_fleet.melt(
         id_vars=["kecamatan"], 
         value_vars=["armada_total", "armada_operasional"],
@@ -265,15 +275,10 @@ if not df_fleet.empty:
     )
     
     fig_bar = px.bar(
-        df_bar, 
-        x="kecamatan", 
-        y="Jumlah Unit", 
-        color="Kategori", 
-        barmode="group",
+        df_bar, x="kecamatan", y="Jumlah Unit", color="Kategori", barmode="group",
         color_discrete_map={"armada_total": "lightgray", "armada_operasional": "#1f77b4"},
         height=400
     )
     st.plotly_chart(fig_bar, use_container_width=True)
-
 else:
     st.info("Tidak ada data armada untuk wilayah yang dipilih.")
