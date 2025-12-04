@@ -1,17 +1,11 @@
 # streamlit/app.py
-import streamlit as st
-import pandas as pd
-import geopandas as gpd
-import os
-import sys
-import re
-import plotly.express as px
-from sqlalchemy import create_engine, text
-import socket
 
-# --- 🛠️ FIX: FORCE IPv4 (WAJIB DI PALING ATAS) ---
-# Ini mengatasi error "Cannot assign requested address" pada IPv6 Supabase
-# Kode ini memaksa Python untuk mengabaikan alamat IPv6 dan hanya memakai IPv4.
+# ==========================================
+# 🔧 FIX: FORCE IPv4 (WAJIB PALING ATAS)
+# ==========================================
+# Kode ini HARUS dijalankan sebelum library lain (seperti sqlalchemy/requests)
+# di-import agar Python dipaksa menggunakan IPv4 dan menghindari error IPv6 Supabase.
+import socket
 try:
     _orig_getaddrinfo = socket.getaddrinfo
     def _ipv4_only_getaddrinfo(*args, **kwargs):
@@ -21,7 +15,16 @@ try:
     socket.getaddrinfo = _ipv4_only_getaddrinfo
 except Exception:
     pass
-# --------------------------------------------------
+# ==========================================
+
+import streamlit as st
+import pandas as pd
+import geopandas as gpd
+import os
+import sys
+import re
+import plotly.express as px
+from sqlalchemy import create_engine, text
 
 # Setup Page Config
 st.set_page_config("Waste Tracker Jakarta", layout="wide")
@@ -34,25 +37,16 @@ try:
 except Exception:
     pass
 
-# --- HELPER FUNCTIONS ---
-def aggressive_clean_py(text):
-    if not isinstance(text, str): return None
-    text = text.strip().upper()
-    text = text.replace('\xa0', ' ')
-    text = re.sub(r'[^\w\s]', '', text) 
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
 # --- DATABASE CONNECTION ---
 def get_db_engine():
     """
-    Hanya mencoba koneksi jika Secrets tersedia di Streamlit Cloud/Lokal.
+    Membuat koneksi database menggunakan Secrets.
     """
     # Cek apakah secrets tersedia
     if st.secrets and "connections" in st.secrets and "postgresql" in st.secrets["connections"]:
         try:
             db_conf = st.secrets["connections"]["postgresql"]
-            # Pastikan menggunakan driver psycopg2
+            # Connection String standar
             url = f"postgresql+psycopg2://{db_conf['username']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['database']}"
             return create_engine(url)
         except Exception as e:
@@ -61,8 +55,17 @@ def get_db_engine():
     else:
         st.error("❌ Kredensial Database tidak ditemukan!")
         st.info("Mohon atur `.streamlit/secrets.toml` (Lokal) atau `Settings -> Secrets` (Streamlit Cloud).")
-        st.stop() 
+        st.stop()
         return None
+
+# --- HELPER FUNCTIONS ---
+def aggressive_clean_py(text):
+    if not isinstance(text, str): return None
+    text = text.strip().upper()
+    text = text.replace('\xa0', ' ')
+    text = re.sub(r'[^\w\s]', '', text) 
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 # --- LOAD DATA FUNCTIONS ---
 @st.cache_data
@@ -93,7 +96,7 @@ def load_geo():
     # Load GeoJSON (File lokal, tidak butuh DB)
     path = os.environ.get("WASTE_DATA_DIR", "./data")
     
-    # Coba cari path data yang benar
+    # Coba cari path data yang benar (Lokal vs Cloud)
     if not os.path.exists(path):
         # Fallback path jika di cloud
         path = os.path.join(os.path.dirname(__file__), "..", "data")
@@ -101,7 +104,11 @@ def load_geo():
     gfile = os.path.join(path, "kecamatan.geojson")
 
     if not os.path.exists(gfile):
-        return None
+        # Coba cari di current directory
+        if os.path.exists("data/kecamatan.geojson"):
+            gfile = "data/kecamatan.geojson"
+        else:
+            return None
 
     try:
         gdf = gpd.read_file(gfile).to_crs(4326)
@@ -143,10 +150,14 @@ def load_fleet_analysis(start_date, end_date):
 st.title("📊 Waste Tracker — Monitoring Sampah Kota")
 
 # A. LOAD INITIAL DATA
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Terjadi kesalahan saat memuat data: {e}")
+    st.stop()
 
 if df.empty:
-    st.warning("Database Kosong atau Query tidak mengembalikan data.")
+    st.warning("Database Kosong atau Query tidak mengembalikan data. Pastikan pipeline ELT sudah dijalankan.")
     st.stop()
 
 # --- SIDEBAR CONFIGURATION ---
@@ -237,7 +248,7 @@ if gdf is not None:
     else:
         st.warning("Data geometri untuk wilayah terpilih tidak ditemukan.")
 else:
-    st.warning("File GeoJSON tidak ditemukan di folder 'data/'.")
+    st.warning("File GeoJSON tidak ditemukan (cek folder data/).")
 
 # F. ANALISIS ARMADA
 st.markdown("---")
