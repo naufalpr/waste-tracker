@@ -8,9 +8,6 @@ from airflow.utils.dates import days_ago
 from sqlalchemy import text
 
 # --- KONFIGURASI PATH ---
-# Kita perlu menambahkan root folder proyek ke sys.path agar Airflow bisa mengimpor modul 'etl', 'utils', dll.
-# Ganti path ini sesuai lokasi proyek Anda di WSL/Linux.
-# Contoh: "/mnt/d/coolyeah/Semester 5/PID/waste-tracker"
 PROJECT_ROOT = os.environ.get("WASTE_PROJECT_ROOT", "/opt/airflow/dags/repo")
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -103,7 +100,7 @@ with DAG(
     'waste_tracker_elt_pipeline',
     default_args=default_args,
     description='Pipeline ELT untuk Waste Tracker Case 4',
-    schedule_interval='0 1 * * *', # Jalan setiap jam 01:00 pagi (Sesuai Proposal)
+    schedule_interval='0 1 * * *', # Jalan setiap jam 01:00 pagi 
     start_date=days_ago(1),
     catchup=False,
     tags=['waste-tracker', 'elt', 'case4'],

@@ -110,7 +110,7 @@ def load_fleet_analysis(start_date, end_date):
             res_fleet = conn.execute(text(q_fleet))
             df_fleet = pd.DataFrame(res_fleet.fetchall(), columns=res_fleet.keys())
 
-            # [FIX PENTING] Konversi kolom angka secara paksa agar tidak dianggap string
+            # Konversi kolom angka agar tidak dianggap string
             cols_to_numeric = ['armada_total', 'armada_operasional', 'ritase_harian', 'kapasitas_m3']
             for col in cols_to_numeric:
                 df_fleet[col] = pd.to_numeric(df_fleet[col], errors='coerce').fillna(0)
@@ -255,7 +255,7 @@ else:
 if not df_fleet.empty:
     DENSITY = 0.33
     
-    # HITUNG KAPASITAS (Sekarang aman karena tipe data sudah Float)
+    # HITUNG KAPASITAS 
     df_fleet['capacity_ton'] = df_fleet['armada_operasional'] * df_fleet['ritase_harian'] * df_fleet['kapasitas_m3'] * DENSITY
     df_fleet['capacity_ton'] = df_fleet['capacity_ton'].replace(0, 0.1)
     

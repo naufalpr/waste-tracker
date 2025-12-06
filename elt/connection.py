@@ -1,4 +1,4 @@
-# etl/connection.py (Pastikan ini adalah sumber tunggal)
+# etl/connection.py
 import os
 from sqlalchemy import create_engine
 import logging
@@ -19,7 +19,7 @@ def get_engine():
     db_url = os.environ.get("WASTE_DB_URL", DEFAULT_DB_URL)
     logger.info("Using DB: %s", db_url)
     
-    # Gunakan future=False agar kompatibel dengan kode text(q) di project Anda
+    # Gunakan future=False agar kompatibel dengan kode text(q) 
     return create_engine(
         db_url,
         pool_pre_ping=True,

@@ -10,9 +10,7 @@ from utils import get_engine
 def setup_elt_database():
     engine = get_engine()
     
-    # ---------------------------------------------------------
-    # 1. TABEL RAW (Tempat Data Kotor Mendarat)
-    # ---------------------------------------------------------
+    # 1. TABEL RAW 
     ddl_raw = """
     CREATE SCHEMA IF NOT EXISTS staging;
 
@@ -39,9 +37,7 @@ def setup_elt_database():
     );
     """
 
-    # ---------------------------------------------------------
     # 2. SQL VIEWS (Logika Transformasi & Pembersihan)
-    # ---------------------------------------------------------
     ddl_views = """
     -- VIEW: Waste Cleaned
     -- Membersihkan spasi, karakter aneh, dan casting tipe data
@@ -72,9 +68,7 @@ def setup_elt_database():
     FROM staging.raw_sipsn;
     """
     
-    # ---------------------------------------------------------
     # 3. WAREHOUSE TABLES (Tabel Akhir)
-    # ---------------------------------------------------------
     ddl_warehouse = """
     CREATE SCHEMA IF NOT EXISTS warehouse;
 

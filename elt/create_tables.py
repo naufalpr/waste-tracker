@@ -2,7 +2,7 @@
 from sqlalchemy import text
 import os
 import logging
-from etl.connection import get_engine # Pastikan Anda mengimpor dari etl.connection
+from etl.connection import get_engine 
 
 # Inisialisasi Logger
 logger = logging.getLogger("waste_tracker")
@@ -27,7 +27,7 @@ def create_warehouse_tables():
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS staging;"))
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS warehouse;"))
         
-        # 2. DROP TABEL LAMA (KRITIS UNTUK REVISI SKEMA)
+        # 2. DROP TABEL LAMA
         # DROP TABLE CASCADE menghapus tabel fakta yang memiliki foreign key ke dimensi
         conn.execute(text("DROP TABLE IF EXISTS warehouse.fact_waste CASCADE;"))
         conn.execute(text("DROP TABLE IF EXISTS warehouse.dim_time;"))
@@ -45,7 +45,7 @@ def create_warehouse_tables():
             );
         """))
 
-        # 4. DIMENSI LOKASI (FIX: Memastikan kolom penduduk & luas_km2 ada)
+        # 4. DIMENSI LOKASI (Memastikan kolom penduduk & luas_km2 ada)
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS warehouse.dim_location (
                 id SERIAL PRIMARY KEY,

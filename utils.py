@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 import os
 
 def get_engine():
-    # 1. Coba ambil dari Streamlit Secrets (Prioritas Utama untuk Cloud)
+    # 1. Ambil dari Streamlit Secrets (Prioritas Utama untuk Cloud)
     try:
         # Mengakses section [connections.postgresql] di secrets.toml
         db_conf = st.secrets["connections"]["postgresql"]
@@ -18,11 +18,9 @@ def get_engine():
         pass
     
     # 2. Fallback: Coba ambil dari Environment Variable (Opsional)
-    # Ini berguna jika Anda menjalankan script ELT di luar Streamlit
     db_url = os.environ.get("WASTE_DB_URL")
     if db_url:
         return create_engine(db_url)
 
-    # 3. Fallback Terakhir: Localhost (Hanya jalan di laptop Anda)
-    # Ganti kredensial ini sesuai database lokal Anda
+    # 3. Fallback Terakhir: Localhost (Hanya jalan di lokal)
     return create_engine("postgresql+psycopg2://postgres:admin123@localhost:5432/waste")

@@ -4,7 +4,7 @@ from utils import get_engine
 def load_fact_waste():
     engine = get_engine()
     
-    # Hapus data lama agar tidak duplikat (untuk demo)
+    # Hapus data lama agar tidak duplikat
     with engine.begin() as conn:
         conn.execute(text("TRUNCATE TABLE warehouse.fact_waste RESTART IDENTITY;"))
 
